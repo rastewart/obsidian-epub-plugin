@@ -1,0 +1,7 @@
+body.epub-focus-mode .workspace-ribbon,
+body.epub-focus-mode .workspace-split.mod-left-split,
+body.epub-focus-mode .workspace-split.mod-right-split,
+body.epub-focus-mode .status-bar,
+body.epub-focus-mode .mobile-toolbar {
+  display: none !important;
+}

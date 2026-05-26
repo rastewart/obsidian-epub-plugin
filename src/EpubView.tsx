@@ -3,6 +3,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { EpubPluginSettings } from "./EpubPluginSettings";
 import { EpubReader } from "./EpubReader";
+import { readProgress, writeProgress, updateProgress } from "./epubProgress";
 
 export const EPUB_FILE_EXTENSION = "epub";
 export const VIEW_TYPE_EPUB = "epub";
@@ -10,6 +11,11 @@ export const ICON_EPUB = "doc-epub";
 
 export class EpubView extends FileView {
   allowNoFile: false;
+
+  private currentContents: ArrayBuffer | null = null;
+  private currentLocation: string | number = 0;
+  private currentTocOffset = 0;
+  private currentTocBottomOffset = 0;
 
   constructor(leaf: WorkspaceLeaf, private settings: EpubPluginSettings) {
     super(leaf);
@@ -27,9 +33,7 @@ export class EpubView extends FileView {
             file = await this.app.vault.create(fileName, this.getFileContent());
           }
           const fileLeaf = this.app.workspace.createLeafBySplit(this.leaf);
-          fileLeaf.openFile(file as TFile, {
-            active: true
-          });
+          fileLeaf.openFile(file as TFile, { active: true });
         });
     });
     menu.addSeparator();
@@ -58,9 +62,49 @@ Date: ${moment().toLocaleString()}
 `;
   }
 
+  private renderReader(file: TFile) {
+    if (!this.currentContents) return;
+    ReactDOM.render(
+      <EpubReader
+        contents={this.currentContents}
+        title={file.basename}
+        scrolled={this.settings.scrolledView}
+        defaultColumnLayout={this.settings.columnLayout}
+        epubTheme={this.settings.epubTheme}
+        fontFamily={this.settings.fontFamily}
+        showFontSizeControl={this.settings.showFontSizeControl}
+        showBrightnessControl={this.settings.showBrightnessControl}
+        showColumnToggle={this.settings.showColumnToggle}
+        showFocusButton={this.settings.showFocusButton}
+        location={this.currentLocation}
+        onLocationChange={async (loc) => {
+          this.currentLocation = loc;
+          await updateProgress(this.app, file, { location: loc });
+        }}
+        tocOffset={this.currentTocOffset}
+        tocBottomOffset={this.currentTocBottomOffset}
+        leaf={this.leaf}
+      />,
+      this.contentEl
+    );
+  }
+
+  refreshSettings() {
+    if (this.file) this.renderReader(this.file);
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     ReactDOM.unmountComponentAtNode(this.contentEl);
     this.contentEl.empty();
+
+    let progress = await readProgress(this.app, file);
+    if (!progress) {
+      progress = { location: 0, archived: false, lastOpened: Date.now() };
+    } else {
+      progress = { ...progress, lastOpened: Date.now(), archived: false };
+    }
+    await writeProgress(this.app, file, progress);
+
     const viewHeaderStyle = getComputedStyle(this.containerEl.parentElement.querySelector('div.view-header'));
     const viewHeaderHeight = parseFloat(viewHeaderStyle.height);
     const viewHeaderWidth = parseFloat(viewHeaderStyle.width);
@@ -69,20 +113,12 @@ Date: ${moment().toLocaleString()}
     const viewContentPaddingBottom = parseFloat(viewContentStyle.paddingBottom);
     const viewContentPaddingTop = parseFloat(viewContentStyle.paddingTop);
 
-    const tocOffset = (viewHeaderHeight < viewHeaderWidth ? viewHeaderHeight : 0) + viewContentPaddingTop + 1;
-    const tocBottomOffset = viewContentPaddingBottom;
+    this.currentTocOffset = (viewHeaderHeight < viewHeaderWidth ? viewHeaderHeight : 0) + viewContentPaddingTop + 1;
+    this.currentTocBottomOffset = viewContentPaddingBottom;
+    this.currentLocation = progress.location;
+    this.currentContents = await this.app.vault.adapter.readBinary(file.path);
 
-    const contents = await this.app.vault.adapter.readBinary(file.path);
-    ReactDOM.render(
-      <EpubReader
-        contents={contents}
-        title={file.basename}
-        scrolled={this.settings.scrolledView}
-        tocOffset={tocOffset}
-        tocBottomOffset={tocBottomOffset}
-        leaf={this.leaf} />,
-      this.contentEl
-    );
+    this.renderReader(file);
   }
 
   onunload(): void {
@@ -90,11 +126,7 @@ Date: ${moment().toLocaleString()}
   }
 
   getDisplayText() {
-    if (this.file) {
-      return this.file.basename;
-    } else {
-      return 'No File';
-    }
+    return this.file ? this.file.basename : 'No File';
   }
 
   canAcceptExtension(extension: string) {

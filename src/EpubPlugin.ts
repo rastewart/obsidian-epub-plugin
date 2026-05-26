@@ -1,6 +1,76 @@
-import { addIcon, Plugin, WorkspaceLeaf } from 'obsidian';
+import { addIcon, App, FuzzyMatch, FuzzySuggestModal, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { EpubPluginSettings, EpubSettingTab, DEFAULT_SETTINGS } from './EpubPluginSettings';
 import { EpubView, EPUB_FILE_EXTENSION, ICON_EPUB, VIEW_TYPE_EPUB } from './EpubView';
+import { BookEntry, loadAllBookEntries, updateProgress } from './epubProgress';
+
+class RecentBooksModal extends FuzzySuggestModal<BookEntry> {
+	constructor(app: App, private plugin: EpubPlugin, private entries: BookEntry[]) {
+		super(app);
+		this.setPlaceholder('Type to search recent EPUBs…');
+	}
+
+	getItems(): BookEntry[] {
+		return this.entries
+			.filter(e => !e.archived)
+			.sort((a, b) => b.lastOpened - a.lastOpened);
+	}
+
+	getItemText(item: BookEntry): string {
+		return item.name;
+	}
+
+	renderSuggestion(match: FuzzyMatch<BookEntry>, el: HTMLElement): void {
+		el.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+		el.createSpan({ text: match.item.name });
+		const btn = el.createEl('button', { text: 'Archive' });
+		btn.style.cssText = 'font-size:11px; padding:1px 8px; flex-shrink:0;';
+		btn.addEventListener('mousedown', (e) => e.stopPropagation());
+		btn.addEventListener('click', async (e) => {
+			e.stopPropagation();
+			const file = this.app.vault.getAbstractFileByPath(match.item.epubPath);
+			if (file instanceof TFile) {
+				await updateProgress(this.app, file, { archived: true });
+			}
+			this.close();
+		});
+	}
+
+	onChooseItem(item: BookEntry): void {
+		const file = this.app.vault.getAbstractFileByPath(item.epubPath);
+		if (file instanceof TFile) {
+			this.app.workspace.getLeaf(false).openFile(file);
+		} else {
+			new Notice(`File not found: ${item.epubPath}`);
+		}
+	}
+}
+
+class ArchivedBooksModal extends FuzzySuggestModal<BookEntry> {
+	constructor(app: App, private entries: BookEntry[]) {
+		super(app);
+		this.setPlaceholder('Type to search archived EPUBs…');
+	}
+
+	getItems(): BookEntry[] {
+		return this.entries
+			.filter(e => e.archived)
+			.sort((a, b) => b.lastOpened - a.lastOpened);
+	}
+
+	getItemText(item: BookEntry): string {
+		return item.name;
+	}
+
+	async onChooseItem(item: BookEntry): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(item.epubPath);
+		if (file instanceof TFile) {
+			await updateProgress(this.app, file, { archived: false });
+			this.app.workspace.getLeaf(false).openFile(file);
+		} else {
+			new Notice(`File not found: ${item.epubPath}`);
+		}
+	}
+}
 
 export default class EpubPlugin extends Plugin {
 	settings: EpubPluginSettings;
@@ -27,9 +97,43 @@ export default class EpubPlugin extends Plugin {
 		}
 
 		this.addSettingTab(new EpubSettingTab(this.app, this));
+
+		this.addCommand({
+			id: 'open-recent-epub',
+			name: 'Open recent EPUB',
+			callback: async () => {
+				const entries = await loadAllBookEntries(this.app);
+				const active = entries.filter(e => !e.archived);
+				if (active.length === 0) {
+					new Notice('No recent EPUBs — open an EPUB file to start tracking');
+					return;
+				}
+				new RecentBooksModal(this.app, this, entries).open();
+			},
+		});
+
+		this.addCommand({
+			id: 'restore-archived-epub',
+			name: 'Restore archived EPUB',
+			callback: async () => {
+				const entries = await loadAllBookEntries(this.app);
+				const archived = entries.filter(e => e.archived);
+				if (archived.length === 0) {
+					new Notice('No archived EPUBs');
+					return;
+				}
+				new ArchivedBooksModal(this.app, entries).open();
+			},
+		});
 	}
 
 	onunload() {
+	}
+
+	refreshEpubViews() {
+		this.app.workspace.getLeavesOfType(VIEW_TYPE_EPUB).forEach(leaf => {
+			(leaf.view as EpubView).refreshSettings();
+		});
 	}
 
 	async loadSettings() {
