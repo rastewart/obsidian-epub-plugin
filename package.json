@@ -29,6 +29,7 @@
 	},
 	"dependencies": {
 		"epubjs": "^0.3.93",
+		"preact": "^10.29.2",
 		"react": "npm:@preact/compat@^17.0.3",
 		"react-dom": "npm:@preact/compat@^17.0.3",
 		"react-reader": "^1.0.2",
